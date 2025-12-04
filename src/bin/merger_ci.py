@@ -226,26 +226,29 @@ def read_inputs(controllers):
     else:
 
         verbose("merger_ci: Merged SPDX file not found, reading individual files")
-        for file in glob.glob(f"{os.getenv('SPDX_FOLDER', SPDX_FOLDER)}/*.spdx.json"):
-            try:
-                verbose(f"merger_ci: Reading {file}")
-                with open(file, "r") as f:
-                    data = json.load(f)
 
-                    if fastspdx3.could_parse_spdx(data):
-                        fastspdx3.parse_controllers_from_dict(data)
-                    elif use_fastspdx:
+    # Always parse SPDX 3 files individually to keep their vulnerability and VEX data
+    for file in glob.glob(f"{os.getenv('SPDX_FOLDER', SPDX_FOLDER)}/*.spdx.json"):
+        try:
+            verbose(f"merger_ci: Reading {file}")
+            with open(file, "r") as f:
+                data = json.load(f)
+
+                if fastspdx3.could_parse_spdx(data):
+                    fastspdx3.parse_from_dict(data)
+                elif not os.path.exists(merged_spdx_path):
+                    if use_fastspdx:
                         fastspdx.parse_from_dict(data)
                     else:
                         spdx.load_from_file(file)
                         spdx.parse_and_merge()
-            except Exception as e:
-                if os.getenv('IGNORE_PARSING_ERRORS', 'false') != 'true':
-                    print(f"Error parsing SPDX file: {file} {e}")
-                    print("Hint: set IGNORE_PARSING_ERRORS=true to ignore this error")
-                    raise e
-                else:
-                    print(f"Ignored: Error parsing SPDX file: {file} {e}")
+        except Exception as e:
+            if os.getenv('IGNORE_PARSING_ERRORS', 'false') != 'true':
+                print(f"Error parsing SPDX file: {file} {e}")
+                print("Hint: set IGNORE_PARSING_ERRORS=true to ignore this error")
+                raise e
+            else:
+                print(f"Ignored: Error parsing SPDX file: {file} {e}")
 
     verbose(f"merger_ci: Reading {os.getenv('GRYPE_SPDX_PATH', GRYPE_SPDX_PATH)}")
     try:

@@ -3,6 +3,12 @@
 # Copyright (C) 2025 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
+import json
+import sys
+import types
+
+import importlib
+
 import pytest
 from src.views.fast_spdx3 import FastSPDX3
 from src.controllers.packages import PackagesController
@@ -594,3 +600,285 @@ def test_vex_relationship_invalid_structure(spdx3_parser):
     assert len(spdx3_parser.packagesCtrl) == 1
     assert len(spdx3_parser.vulnerabilitiesCtrl) == 0
     assert len(spdx3_parser.assessmentsCtrl) == 0
+
+
+def test_merger_reads_spdx3_files(monkeypatch, tmp_path):
+    """Ensure SPDX 3 inputs are fully parsed even when merged SPDX is used."""
+
+    def stub_external_modules():
+        cyclonedx_module = types.ModuleType("cyclonedx")
+        sys.modules["cyclonedx"] = cyclonedx_module
+
+        model_module = types.ModuleType("cyclonedx.model")
+        sys.modules["cyclonedx.model"] = model_module
+        cyclonedx_module.model = model_module
+
+        bom_module = types.ModuleType("cyclonedx.model.bom")
+
+        class Bom:
+            @classmethod
+            def from_json(cls, data=None):
+                return cls()
+
+            def __init__(self):
+                self.components = []
+                self.vulnerabilities = []
+
+        bom_module.Bom = Bom
+        sys.modules["cyclonedx.model.bom"] = bom_module
+        model_module.bom = bom_module
+
+        component_module = types.ModuleType("cyclonedx.model.component")
+
+        class Component:
+            def __init__(self, *args, **kwargs):
+                self.name = kwargs.get("name")
+                self.version = kwargs.get("version")
+
+        component_module.Component = Component
+        sys.modules["cyclonedx.model.component"] = component_module
+        model_module.component = component_module
+
+        vuln_module = types.ModuleType("cyclonedx.model.vulnerability")
+
+        class VulnerabilitySeverity:
+            LOW = "low"
+            MEDIUM = "medium"
+            HIGH = "high"
+            CRITICAL = "critical"
+            INFO = "info"
+            UNKNOWN = "unknown"
+
+        class VulnerabilityScoreSource:
+            CVSS_V4 = "CVSS_V4"
+            CVSS_V3_1 = "CVSS_V3_1"
+            CVSS_V3 = "CVSS_V3"
+            CVSS_V2 = "CVSS_V2"
+
+            @staticmethod
+            def get_from_vector(vector):
+                return "UNKNOWN"
+
+        vuln_module.VulnerabilitySeverity = VulnerabilitySeverity
+        vuln_module.VulnerabilityScoreSource = VulnerabilityScoreSource
+        sys.modules["cyclonedx.model.vulnerability"] = vuln_module
+        model_module.vulnerability = vuln_module
+
+        impact_module = types.ModuleType("cyclonedx.model.impact_analysis")
+
+        class ImpactAnalysisState:
+            RESOLVED = "resolved"
+            RESOLVED_WITH_PEDIGREE = "resolved_with_pedigree"
+            EXPLOITABLE = "exploitable"
+            IN_TRIAGE = "in_triage"
+            FALSE_POSITIVE = "false_positive"
+            NOT_AFFECTED = "not_affected"
+
+        class ImpactAnalysisJustification:
+            CODE_NOT_PRESENT = "code_not_present"
+            CODE_NOT_REACHABLE = "code_not_reachable"
+            PROTECTED_AT_PERIMETER = "protected_at_perimeter"
+            PROTECTED_AT_PERIMITER = "protected_at_perimeter"
+            PROTECTED_AT_RUNTIME = "protected_at_runtime"
+            PROTECTED_BY_COMPILER = "protected_by_compiler"
+            PROTECTED_BY_MITIGATING_CONTROL = "protected_by_mitigating_control"
+            REQUIRES_CONFIGURATION = "requires_configuration"
+            REQUIRES_DEPENDENCY = "requires_dependency"
+            REQUIRES_ENVIRONMENT = "requires_environment"
+
+        impact_module.ImpactAnalysisState = ImpactAnalysisState
+        impact_module.ImpactAnalysisJustification = ImpactAnalysisJustification
+        sys.modules["cyclonedx.model.impact_analysis"] = impact_module
+        model_module.impact_analysis = impact_module
+
+        output_json_module = types.ModuleType("cyclonedx.output.json")
+
+        class _JsonStub:
+            def __init__(self, sbom):
+                self.sbom = sbom
+
+            def output_as_string(self, indent=2):
+                return "{}"
+
+        output_json_module.JsonV1Dot4 = _JsonStub
+        output_json_module.JsonV1Dot5 = _JsonStub
+        output_json_module.JsonV1Dot6 = _JsonStub
+        sys.modules["cyclonedx.output.json"] = output_json_module
+        cyclonedx_module.output = types.SimpleNamespace(json=output_json_module)
+
+        packageurl_module = types.ModuleType("packageurl")
+
+        class PackageURL:
+            def __init__(self, *args, **kwargs):
+                pass
+
+        packageurl_module.PackageURL = PackageURL
+        sys.modules["packageurl"] = packageurl_module
+
+        cyclonedx_view_module = types.ModuleType("src.views.cyclonedx")
+
+        class CycloneDx:
+            def __init__(self, controllers):
+                self.controllers = controllers
+
+            def load_from_dict(self, cyclonedx: dict):
+                self.sbom = cyclonedx
+
+            def parse_and_merge(self):
+                return None
+
+            def output_as_json(self):
+                return "{}"
+
+        cyclonedx_view_module.CycloneDx = CycloneDx
+        sys.modules["src.views.cyclonedx"] = cyclonedx_view_module
+
+        spdx_view_module = types.ModuleType("src.views.spdx")
+
+        class SPDX:
+            def __init__(self, controllers):
+                self.controllers = controllers
+
+            def load_from_file(self, spdx_file: str):
+                return None
+
+            def parse_and_merge(self):
+                return None
+
+            def output_as_json(self, with_cpe: bool = False):
+                return "{}"
+
+        spdx_view_module.SPDX = SPDX
+        sys.modules["src.views.spdx"] = spdx_view_module
+
+        templates_module = types.ModuleType("src.views.templates")
+
+        class Templates:
+            def __init__(self, controllers):
+                self.controllers = controllers
+
+            def render(self, template_name: str, **metadata):
+                return ""
+
+        templates_module.Templates = Templates
+        sys.modules["src.views.templates"] = templates_module
+
+        conditions_module = types.ModuleType("src.controllers.conditions_parser")
+
+        class ConditionParser:
+            def __init__(self, debug: bool = False):
+                self.debug = debug
+
+            def evaluate(self, condition: str, data: dict):
+                return False
+
+        conditions_module.ConditionParser = ConditionParser
+        sys.modules["src.controllers.conditions_parser"] = conditions_module
+
+        vulnerabilities_module = types.ModuleType("src.controllers.vulnerabilities")
+
+        class VulnerabilitiesController:
+            def __init__(self, packages):
+                self.packages = packages
+                self.vulnerabilities = {}
+
+            def add(self, vulnerability):
+                if vulnerability is None:
+                    return
+                self.vulnerabilities[vulnerability.id] = vulnerability
+
+            def get(self, vuln_id):
+                return self.vulnerabilities.get(vuln_id)
+
+            def remove(self, vuln_id):
+                self.vulnerabilities.pop(vuln_id, None)
+
+            def to_dict(self):
+                return {k: v.to_dict() for k, v in self.vulnerabilities.items()}
+
+            def fetch_epss_scores(self):
+                return None
+
+            def __contains__(self, item):
+                return item in self.vulnerabilities
+
+        vulnerabilities_module.VulnerabilitiesController = VulnerabilitiesController
+        sys.modules["src.controllers.vulnerabilities"] = vulnerabilities_module
+
+    stub_external_modules()
+
+    from src.bin.merger_ci import read_inputs
+
+    spdx_folder = tmp_path / "spdx"
+    spdx_folder.mkdir()
+    spdx_file = spdx_folder / "input.spdx.json"
+
+    spdx3_data = {
+        "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+        "@graph": [
+            {
+                "@type": "CreationInfo",
+                "specVersion": "3.0.1"
+            },
+            {
+                "type": "software_Package",
+                "spdxId": "urn:spdx3.pkg:libc6",
+                "name": "libc6",
+                "versionInfo": "2.38"
+            },
+            {
+                "type": "security_Vulnerability",
+                "spdxId": "urn:spdx3.vuln:CVE-2019-1010022",
+                "externalIdentifier": [
+                    {
+                        "externalIdentifierType": "cve",
+                        "identifier": "CVE-2019-1010022"
+                    }
+                ]
+            },
+            {
+                "type": "Relationship",
+                "from": "urn:spdx3.pkg:libc6",
+                "relationshipType": "hasAssociatedVulnerability",
+                "to": ["urn:spdx3.vuln:CVE-2019-1010022"]
+            },
+            {
+                "type": "security_VexNotAffectedVulnAssessmentRelationship",
+                "from": "urn:spdx3.vuln:CVE-2019-1010022",
+                "relationshipType": "doesNotAffect",
+                "to": ["urn:spdx3.pkg:libc6"],
+                "security_justificationType": "componentNotPresent"
+            }
+        ]
+    }
+
+    spdx_file.write_text(json.dumps(spdx3_data))
+
+    controllers = {}
+    controllers["packages"] = PackagesController()
+    vuln_ctrl_cls = importlib.import_module("src.controllers.vulnerabilities").VulnerabilitiesController
+    controllers["vulnerabilities"] = vuln_ctrl_cls(controllers["packages"])
+    controllers["assessments"] = AssessmentsController(
+        controllers["packages"], controllers["vulnerabilities"]
+    )
+
+    monkeypatch.setenv("SPDX_FOLDER", str(spdx_folder))
+    monkeypatch.setenv("SPDX_MERGED_PATH", str(tmp_path / "merged.spdx.json"))
+    monkeypatch.setenv("OPENVEX_PATH", str(tmp_path / "openvex.json"))
+    monkeypatch.setenv("TIME_ESTIMATES_PATH", str(tmp_path / "time_estimates.json"))
+    monkeypatch.setenv("CDX_PATH", str(tmp_path / "input.cdx.json"))
+    monkeypatch.setenv("GRYPE_CDX_PATH", str(tmp_path / "cdx.grype.json"))
+    monkeypatch.setenv("GRYPE_SPDX_PATH", str(tmp_path / "spdx.grype.json"))
+    monkeypatch.setenv("YOCTO_FOLDER", str(tmp_path / "yocto"))
+
+    read_inputs(controllers)
+
+    assert "libc6@2.38" in controllers["packages"]
+    assert "CVE-2019-1010022" in controllers["vulnerabilities"]
+    vuln = controllers["vulnerabilities"].get("CVE-2019-1010022")
+    assert "libc6@2.38" in vuln.packages
+
+    assessments = controllers["assessments"].gets_by_vuln("CVE-2019-1010022")
+    assert len(assessments) == 1
+    assert assessments[0].status == "not_affected"
+    assert assessments[0].justification == "component_not_present"
